@@ -55,14 +55,17 @@ struct TriggerEntity: AppEntity, Identifiable, Hashable {
 
 struct TriggerEntityQuery: EntityQuery {
     func entities(for identifiers: [TriggerEntity.ID]) async throws -> [TriggerEntity] {
-        WidgetSnapshotStore.load()
+        let snapshots = await MainActor.run { WidgetSnapshotStore.load() }
+        return snapshots
             .filter { identifiers.contains($0.id) }
             .map(TriggerEntity.init)
     }
 
     func suggestedEntities() async throws -> [TriggerEntity] {
-        let preferred = WidgetSnapshotStore.preferredTriggerId
-        return WidgetSnapshotStore.load()
+        let (preferred, snapshots) = await MainActor.run {
+            (WidgetSnapshotStore.preferredTriggerId, WidgetSnapshotStore.load())
+        }
+        return snapshots
             .sorted { lhs, rhs in
                 if lhs.id == preferred { return true }
                 if rhs.id == preferred { return false }
@@ -72,7 +75,9 @@ struct TriggerEntityQuery: EntityQuery {
     }
 
     func defaultResult() async -> TriggerEntity? {
-        WidgetSnapshotStore.snapshot(for: nil).map(TriggerEntity.init)
+        await MainActor.run {
+            WidgetSnapshotStore.snapshot(for: nil).map(TriggerEntity.init)
+        }
     }
 }
 
@@ -87,13 +92,19 @@ struct HeatmapTimelineProvider: AppIntentTimelineProvider {
     }
 
     func snapshot(for configuration: SelectTriggerIntent, in context: Context) async -> HeatmapEntry {
-        HeatmapEntry(date: Date(), snapshot: WidgetSnapshotStore.snapshot(for: configuration.trigger?.id))
+        let snapshot = await MainActor.run {
+            WidgetSnapshotStore.snapshot(for: configuration.trigger?.id)
+        }
+        return HeatmapEntry(date: Date(), snapshot: snapshot)
     }
 
     func timeline(for configuration: SelectTriggerIntent, in context: Context) async -> Timeline<HeatmapEntry> {
+        let snapshot = await MainActor.run {
+            WidgetSnapshotStore.snapshot(for: configuration.trigger?.id)
+        }
         let entry = HeatmapEntry(
             date: Date(),
-            snapshot: WidgetSnapshotStore.snapshot(for: configuration.trigger?.id)
+            snapshot: snapshot
         )
         let next = Calendar.current.date(byAdding: .minute, value: 30, to: Date()) ?? Date().addingTimeInterval(1800)
         return Timeline(entries: [entry], policy: .after(next))

@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import com.apprch.app.data.AppAppearance
 import com.apprch.app.data.AppearancePrefs
 import com.apprch.app.data.GroupStore
+import com.apprch.app.ui.auth.AuthErrors
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
@@ -73,8 +74,8 @@ fun ProfileScreen(onDismiss: () -> Unit, onSignOut: () -> Unit) {
     var photo by remember { mutableStateOf<String?>(null) }
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
+    var passwordStep by remember { mutableStateOf(PasswordStep.Idle) }
     var error by remember { mutableStateOf<String?>(null) }
-    var passwordSaved by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(user?.uid) {
@@ -182,31 +183,86 @@ fun ProfileScreen(onDismiss: () -> Unit, onSignOut: () -> Unit) {
             Text("Email", style = MaterialTheme.typography.titleSmall)
             Text(user?.email ?: "No email", color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-            OutlinedTextField(value = currentPassword, onValueChange = { currentPassword = it }, label = { Text("Current password") }, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(value = newPassword, onValueChange = { newPassword = it }, label = { Text("New password (6+ characters)") }, modifier = Modifier.fillMaxWidth())
-            Button(
-                onClick = {
-                    scope.launch {
-                        isSaving = true
+            Text("Password", style = MaterialTheme.typography.titleSmall)
+            when (passwordStep) {
+                PasswordStep.Idle -> Button(
+                    onClick = {
                         error = null
-                        passwordSaved = false
-                        try {
-                            val email = user?.email ?: throw IllegalStateException("Please sign in again.")
-                            val credential = EmailAuthProvider.credential(email, currentPassword)
-                            user.reauthenticate(credential).await()
-                            user.updatePassword(newPassword).await()
-                            currentPassword = ""
-                            newPassword = ""
-                            passwordSaved = true
-                        } catch (e: Exception) {
-                            error = e.localizedMessage
-                        }
-                        isSaving = false
+                        currentPassword = ""
+                        newPassword = ""
+                        passwordStep = PasswordStep.Current
                     }
-                },
-                enabled = currentPassword.isNotBlank() && newPassword.length >= 6 && !isSaving
-            ) { Text("Update password") }
-            if (passwordSaved) Text("Password updated", color = MaterialTheme.colorScheme.primary)
+                ) { Text("Reset password") }
+                PasswordStep.Current -> {
+                    OutlinedTextField(
+                        value = currentPassword,
+                        onValueChange = { currentPassword = it },
+                        label = { Text("Current password") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isSaving = true
+                                error = null
+                                try {
+                                    val email = user?.email ?: throw IllegalStateException("Please sign in again.")
+                                    val credential = EmailAuthProvider.credential(email, currentPassword)
+                                    user.reauthenticate(credential).await()
+                                    currentPassword = ""
+                                    passwordStep = PasswordStep.New
+                                } catch (e: Exception) {
+                                    error = AuthErrors.userFacingMessage(e)
+                                }
+                                isSaving = false
+                            }
+                        },
+                        enabled = currentPassword.isNotBlank() && !isSaving
+                    ) { Text("Continue") }
+                    TextButton(onClick = {
+                        currentPassword = ""
+                        newPassword = ""
+                        passwordStep = PasswordStep.Idle
+                        error = null
+                    }) { Text("Cancel") }
+                }
+                PasswordStep.New -> {
+                    OutlinedTextField(
+                        value = newPassword,
+                        onValueChange = { newPassword = it },
+                        label = { Text("New password (6+ characters)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                isSaving = true
+                                error = null
+                                try {
+                                    user?.updatePassword(newPassword)?.await()
+                                        ?: throw IllegalStateException("Please sign in again.")
+                                    newPassword = ""
+                                    passwordStep = PasswordStep.Success
+                                } catch (e: Exception) {
+                                    error = AuthErrors.userFacingMessage(e)
+                                }
+                                isSaving = false
+                            }
+                        },
+                        enabled = newPassword.length >= 6 && !isSaving
+                    ) { Text("Save new password") }
+                    TextButton(onClick = {
+                        currentPassword = ""
+                        newPassword = ""
+                        passwordStep = PasswordStep.Idle
+                        error = null
+                    }) { Text("Cancel") }
+                }
+                PasswordStep.Success -> Text(
+                    "Congrats — your password is updated.",
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
 
             Text("Appearance", style = MaterialTheme.typography.titleSmall)
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -224,6 +280,8 @@ fun ProfileScreen(onDismiss: () -> Unit, onSignOut: () -> Unit) {
         }
     }
 }
+
+private enum class PasswordStep { Idle, Current, New, Success }
 
 private fun encodedAvatar(image: Bitmap): String {
     val size = 256

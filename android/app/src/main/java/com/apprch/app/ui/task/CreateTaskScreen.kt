@@ -77,7 +77,7 @@ fun CreateTaskScreen(
     fun suggested(forName: String) = if (forName.isBlank()) "" else "$icon ${forName.trim()}"
 
     if (createdId != null) {
-        val url = "apprch://open?id=$createdId"
+        val url = "https://apprch.web.app/t/$createdId"
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -97,7 +97,7 @@ fun CreateTaskScreen(
                 Text(name.ifBlank { "Task created" }, style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Copy this as a URI (not a website). Tapping the tag opens Apprch and logs it.",
+                    "Write this onto a tag. Tapping it later opens Apprch and logs the Task.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

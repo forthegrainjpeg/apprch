@@ -10,23 +10,25 @@ struct ProfileView: View {
     @State private var name: String = ""
     @State private var currentPassword = ""
     @State private var newPassword = ""
+    @State private var passwordStep: PasswordStep = .idle
     @State private var pickerItem: PhotosPickerItem?
     @State private var isSaving = false
     @State private var errorMessage: String?
-    @State private var passwordSaved = false
     @AppStorage("apprch.appearance") private var appearanceRaw = AppAppearance.system.rawValue
 
     var body: some View {
-        NavigationStack {
+        let hasPhoto = authVM.profilePhotoBase64 != nil
+        let photoData = authVM.profilePhotoBase64
+        return NavigationStack {
             Form {
                 Section {
                     HStack(spacing: 16) {
-                        profileImage
+                        profileImage(photoData)
                         VStack(alignment: .leading, spacing: 8) {
                             PhotosPicker(selection: $pickerItem, matching: .images) {
-                                Text(authVM.profilePhotoBase64 == nil ? "Add photo" : "Change photo")
+                                Text(hasPhoto ? "Change photo" : "Add photo")
                             }
-                            if authVM.profilePhotoBase64 != nil {
+                            if hasPhoto {
                                 Button("Remove photo", role: .destructive) {
                                     Task { await savePhoto(nil) }
                                 }
@@ -51,15 +53,36 @@ struct ProfileView: View {
                 }
 
                 Section("Password") {
-                    SecureField("Current password", text: $currentPassword)
-                    SecureField("New password (6+ characters)", text: $newPassword)
-                    Button("Update password") {
-                        Task { await savePassword() }
-                    }
-                    .disabled(isSaving || currentPassword.isEmpty || newPassword.count < 6)
-                    if passwordSaved {
-                        Text("Password updated")
-                            .font(.caption)
+                    switch passwordStep {
+                    case .idle:
+                        Button("Reset password") {
+                            errorMessage = nil
+                            currentPassword = ""
+                            newPassword = ""
+                            passwordStep = .current
+                        }
+                    case .current:
+                        SecureField("Current password", text: $currentPassword)
+                        Button("Continue") {
+                            Task { await confirmCurrentPassword() }
+                        }
+                        .disabled(isSaving || currentPassword.isEmpty)
+                        Button("Cancel") {
+                            resetPasswordFlow()
+                        }
+                        .font(.footnote)
+                    case .new:
+                        SecureField("New password (6+ characters)", text: $newPassword)
+                        Button("Save new password") {
+                            Task { await saveNewPassword() }
+                        }
+                        .disabled(isSaving || newPassword.count < 6)
+                        Button("Cancel") {
+                            resetPasswordFlow()
+                        }
+                        .font(.footnote)
+                    case .success:
+                        Text("Congrats — your password is updated.")
                             .foregroundStyle(.green)
                     }
                 }
@@ -104,9 +127,9 @@ struct ProfileView: View {
         }
     }
 
-    private var profileImage: some View {
+    private func profileImage(_ photoBase64: String?) -> some View {
         ZStack {
-            if let image = SpaceMember.image(from: authVM.profilePhotoBase64) {
+            if let image = SpaceMember.image(from: photoBase64) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -127,24 +150,42 @@ struct ProfileView: View {
         do {
             try await authVM.updateDisplayName(name)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthUserFacing.message(for: error)
         }
         isSaving = false
     }
 
-    private func savePassword() async {
+    private func confirmCurrentPassword() async {
         isSaving = true
         errorMessage = nil
-        passwordSaved = false
         do {
-            try await authVM.updatePassword(current: currentPassword, new: newPassword)
+            try await authVM.confirmCurrentPassword(currentPassword)
             currentPassword = ""
-            newPassword = ""
-            passwordSaved = true
+            passwordStep = .new
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = AuthUserFacing.message(for: error)
         }
         isSaving = false
+    }
+
+    private func saveNewPassword() async {
+        isSaving = true
+        errorMessage = nil
+        do {
+            try await authVM.setNewPassword(newPassword)
+            newPassword = ""
+            passwordStep = .success
+        } catch {
+            errorMessage = AuthUserFacing.message(for: error)
+        }
+        isSaving = false
+    }
+
+    private func resetPasswordFlow() {
+        currentPassword = ""
+        newPassword = ""
+        passwordStep = .idle
+        errorMessage = nil
     }
 
     private func loadPickedPhoto(_ item: PhotosPickerItem?) async {
@@ -180,4 +221,11 @@ struct ProfileView: View {
         }
         return squared.jpegData(compressionQuality: 0.7)?.base64EncodedString()
     }
+}
+
+private enum PasswordStep {
+    case idle
+    case current
+    case new
+    case success
 }

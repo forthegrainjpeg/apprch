@@ -20,7 +20,7 @@ This is the slice people can use and build on. It is not the finished product.
 
 **You can already:**
 
-- Sign in with email and password
+- Sign in with email and password, or email a reset link if you forgot it
 - Keep a private **Solo** space and one or more **Groups**
 - Create, edit, and move Tasks between spaces
 - Check a Task for today (the circle resets each day)
@@ -76,7 +76,7 @@ Jetpack Compose mirrors the iOS spaces and Tasks. A Glance Home Screen widget sh
 4. Home shows a filled circle for today; the detail page shows the heatmap
 5. Open a Task and add its heatmap widget to keep it on the Home Screen
 
-On a Personal Team debug build, iOS cannot claim Universal Links, so tags use the custom `apprch://` scheme.
+Tags write `https://apprch.web.app/t/{id}` so a tap can open the app via Universal Links. Older `apprch://` tags still work.
 
 ### Data model
 

@@ -13,10 +13,17 @@
     "cleanUrls": false,
     "ignore": [
       "firebase.json",
-      "**/.*",
       "**/node_modules/**"
     ],
     "rewrites": [
+      {
+        "source": "/reset",
+        "destination": "/password-reset.html"
+      },
+      {
+        "source": "/password-reset",
+        "destination": "/password-reset.html"
+      },
       {
         "source": "/t/**",
         "destination": "/index.html"
