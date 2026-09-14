@@ -26,7 +26,7 @@ data class Task(
 
     val accent: Color get() = colorFromHex(accentColorHex ?: TaskAccent.fallbackHex)
 
-    val tagUrl: String get() = "apprch://open?id=$id"
+    val tagUrl: String get() = "https://apprch.web.app/t/$id"
 }
 
 data class TaskEvent(

@@ -9,6 +9,7 @@ struct AuthView: View {
     @State private var displayName = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showReset = false
 
     var body: some View {
         NavigationStack {
@@ -61,6 +62,14 @@ struct AuthView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(isLoading || !formValid)
+
+                    if !isSignUp {
+                        Button("Forgot Password") {
+                            showReset = true
+                        }
+                        .font(.footnote)
+                        .disabled(!AuthEmail.isComplete(email))
+                    }
                 }
                 .padding(.horizontal)
 
@@ -73,6 +82,9 @@ struct AuthView: View {
                 }
 
                 Spacer()
+            }
+            .navigationDestination(isPresented: $showReset) {
+                ResetPasswordView(initialEmail: email)
             }
         }
     }
@@ -92,9 +104,98 @@ struct AuthView: View {
                     try await authVM.signIn(email: email, password: password)
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = AuthUserFacing.message(for: error)
             }
             isLoading = false
         }
+    }
+}
+
+struct ResetPasswordView: View {
+    @EnvironmentObject var authVM: AuthViewModel
+
+    @State private var email: String
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var resetSent = false
+
+    init(initialEmail: String) {
+        _email = State(initialValue: initialEmail)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Provide the email on your account. We’ll send a reset link there.")
+                .foregroundStyle(.secondary)
+
+            TextField("Email", text: $email)
+                .textContentType(.emailAddress)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: email) { _, _ in
+                    resetSent = false
+                    errorMessage = nil
+                }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+
+            Button {
+                sendReset()
+            } label: {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Text("Reset password")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isLoading || !AuthEmail.isComplete(email))
+
+            if resetSent {
+                Text("Check your email for a reset link.")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            }
+
+            Spacer()
+        }
+        .padding()
+        .navigationTitle("Reset password")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func sendReset() {
+        isLoading = true
+        errorMessage = nil
+        resetSent = false
+        Task {
+            do {
+                try await authVM.sendPasswordReset(email: email)
+                resetSent = true
+            } catch {
+                errorMessage = AuthUserFacing.message(for: error)
+            }
+            isLoading = false
+        }
+    }
+}
+
+enum AuthEmail {
+    static func isComplete(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty else { return false }
+        let domain = parts[1]
+        return domain.contains(".")
+            && !domain.hasPrefix(".")
+            && !domain.hasSuffix(".")
+            && !domain.contains(" ")
     }
 }

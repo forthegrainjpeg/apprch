@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import CoreNFC
+@preconcurrency import CoreNFC
 
 @MainActor
 final class NFCTagController: NSObject, ObservableObject {
@@ -13,32 +13,23 @@ final class NFCTagController: NSObject, ObservableObject {
     @Published var status: Status = .idle
 
     static var unavailableMessage: String {
-        #if PERSONAL_TEAM
-        "NFC needs a paid Apple Developer team. This Debug build can run on your iPhone, but it can’t write or read tags yet."
-        #else
         "NFC needs a physical iPhone, not the Simulator."
-        #endif
     }
 
     static var isAvailable: Bool {
-        #if PERSONAL_TEAM
-        false
-        #else
         NFCNDEFReaderSession.readingAvailable
-        #endif
     }
 
+    nonisolated private let pending = Pending()
     private var session: NFCNDEFReaderSession?
-    private var urlToWrite: URL?
-    private var onRead: ((URL) -> Void)?
 
     func write(url: URL) {
         guard Self.isAvailable else {
             status = .failed(Self.unavailableMessage)
             return
         }
-        urlToWrite = url
-        onRead = nil
+        pending.urlToWrite = url
+        pending.onRead = nil
         status = .idle
         beginSession(alert: "Hold the top of your iPhone on the tag to write this Task.")
     }
@@ -48,8 +39,8 @@ final class NFCTagController: NSObject, ObservableObject {
             status = .failed(Self.unavailableMessage)
             return
         }
-        urlToWrite = nil
-        onRead = onURL
+        pending.urlToWrite = nil
+        pending.onRead = onURL
         status = .idle
         beginSession(alert: "Hold the top of your iPhone on the tag to read it.")
     }
@@ -62,12 +53,8 @@ final class NFCTagController: NSObject, ObservableObject {
         next.begin()
     }
 
-    private func finish(session: NFCNDEFReaderSession, message: String, success: Bool) {
-        session.alertMessage = message
-        session.invalidate()
-        Task { @MainActor in
-            self.status = success ? .success(message) : .failed(message)
-        }
+    fileprivate func publish(success: Bool, message: String) {
+        status = success ? .success(message) : .failed(message)
     }
 }
 
@@ -80,86 +67,103 @@ extension NFCTagController: NFCNDEFReaderSessionDelegate {
            nfcError.code == NFCReaderError.readerSessionInvalidationErrorUserCanceled.rawValue {
             return
         }
+        let message = error.localizedDescription
         Task { @MainActor in
-            self.status = .failed(error.localizedDescription)
+            self.publish(success: false, message: message)
         }
     }
 
     nonisolated func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {}
 
     nonisolated func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [any NFCNDEFTag]) {
-        guard let tag = tags.first else { return }
+        guard let first = tags.first else { return }
         if tags.count > 1 {
             session.alertMessage = "More than one tag found. Try again with a single tag."
             session.restartPolling()
             return
         }
 
-        session.connect(to: tag) { error in
+        let pending = self.pending
+        nonisolated(unsafe) let connectedSession = session
+        nonisolated(unsafe) let connectedTag = first
+        connectedSession.connect(to: connectedTag) { [weak self] error in
             if let error {
-                session.invalidate(errorMessage: error.localizedDescription)
+                connectedSession.invalidate(errorMessage: error.localizedDescription)
                 return
             }
-            Task { @MainActor in
-                if let url = self.urlToWrite {
-                    self.write(url, to: tag, session: session)
-                } else {
-                    self.read(from: tag, session: session)
-                }
+            if let url = pending.urlToWrite {
+                self?.write(url, to: connectedTag, session: connectedSession)
+            } else {
+                self?.read(from: connectedTag, session: connectedSession)
             }
         }
     }
 
-    private func write(_ url: URL, to tag: any NFCNDEFTag, session: NFCNDEFReaderSession) {
-        tag.queryNDEFStatus { status, capacity, error in
+    nonisolated fileprivate func write(_ url: URL, to tag: any NFCNDEFTag, session: NFCNDEFReaderSession) {
+        nonisolated(unsafe) let connectedSession = session
+        nonisolated(unsafe) let connectedTag = tag
+        connectedTag.queryNDEFStatus { [weak self] status, capacity, error in
             if let error {
-                session.invalidate(errorMessage: error.localizedDescription)
+                connectedSession.invalidate(errorMessage: error.localizedDescription)
                 return
             }
             guard status != .notSupported else {
-                session.invalidate(errorMessage: "This tag isn’t writable.")
+                connectedSession.invalidate(errorMessage: "This tag isn’t writable.")
                 return
             }
             guard status != .readOnly else {
-                session.invalidate(errorMessage: "This tag is locked and can’t be written.")
+                connectedSession.invalidate(errorMessage: "This tag is locked and can’t be written.")
                 return
             }
             guard let payload = NFCNDEFPayload.wellKnownTypeURIPayload(url: url) else {
-                session.invalidate(errorMessage: "Couldn’t build the tag link.")
+                connectedSession.invalidate(errorMessage: "Couldn’t build the tag link.")
                 return
             }
             let message = NFCNDEFMessage(records: [payload])
             guard message.length <= capacity else {
-                session.invalidate(errorMessage: "This tag doesn’t have enough space.")
+                connectedSession.invalidate(errorMessage: "This tag doesn’t have enough space.")
                 return
             }
-            tag.writeNDEF(message) { error in
+            connectedTag.writeNDEF(message) { error in
                 if let error {
-                    session.invalidate(errorMessage: error.localizedDescription)
+                    connectedSession.invalidate(errorMessage: error.localizedDescription)
                     return
                 }
+                connectedSession.alertMessage = "Tag written."
+                connectedSession.invalidate()
                 Task { @MainActor in
-                    self.finish(session: session, message: "Tag written.", success: true)
+                    self?.publish(success: true, message: "Tag written.")
                 }
             }
         }
     }
 
-    private func read(from tag: any NFCNDEFTag, session: NFCNDEFReaderSession) {
-        tag.readNDEF { message, error in
+    nonisolated fileprivate func read(from tag: any NFCNDEFTag, session: NFCNDEFReaderSession) {
+        nonisolated(unsafe) let connectedSession = session
+        nonisolated(unsafe) let connectedTag = tag
+        let onRead = pending.onRead
+        connectedTag.readNDEF { [weak self] message, error in
             if let error {
-                session.invalidate(errorMessage: error.localizedDescription)
+                connectedSession.invalidate(errorMessage: error.localizedDescription)
                 return
             }
             let url = message?.records.compactMap { $0.wellKnownTypeURIPayload() }.first
             guard let url else {
-                session.invalidate(errorMessage: "No link found on this tag.")
+                connectedSession.invalidate(errorMessage: "No link found on this tag.")
                 return
             }
+            connectedSession.alertMessage = "Tag read."
+            connectedSession.invalidate()
             Task { @MainActor in
-                self.onRead?(url)
-                self.finish(session: session, message: "Tag read.", success: true)
+                onRead?(url)
+                self?.publish(success: true, message: "Tag read.")
             }
         }
     }
+}
+
+/// CoreNFC callbacks are not Sendable; this box lets the session read the pending URL off the main actor.
+nonisolated private final class Pending: @unchecked Sendable {
+    var urlToWrite: URL?
+    var onRead: ((URL) -> Void)?
 }

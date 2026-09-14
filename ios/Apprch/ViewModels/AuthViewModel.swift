@@ -62,6 +62,23 @@ final class AuthViewModel: ObservableObject {
         try await Auth.auth().signIn(withEmail: email, password: password)
     }
 
+    func sendPasswordReset(email: String) async throws {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw AuthResetError.emptyEmail
+        }
+        do {
+            try await Auth.auth().sendPasswordReset(withEmail: trimmed)
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == AuthErrorDomain,
+               nsError.code == AuthErrorCode.userNotFound.rawValue {
+                return
+            }
+            throw error
+        }
+    }
+
     func signOut() throws {
         try Auth.auth().signOut()
         profileName = ""
@@ -84,12 +101,18 @@ final class AuthViewModel: ObservableObject {
         profileName = trimmed
     }
 
-    func updatePassword(current: String, new: String) async throws {
+    func confirmCurrentPassword(_ current: String) async throws {
         guard let user = Auth.auth().currentUser, let email = user.email else {
             throw GroupStoreError.signedOut
         }
         let credential = EmailAuthProvider.credential(withEmail: email, password: current)
         try await user.reauthenticate(with: credential)
+    }
+
+    func setNewPassword(_ new: String) async throws {
+        guard let user = Auth.auth().currentUser else {
+            throw GroupStoreError.signedOut
+        }
         try await user.updatePassword(to: new)
     }
 
@@ -186,5 +209,52 @@ final class AuthViewModel: ObservableObject {
             all.insert(active, at: 0)
         }
         state = .ready(active: active, spaces: all)
+    }
+}
+
+enum AuthUserFacing {
+    static func message(for error: Error) -> String {
+        if let reset = error as? AuthResetError {
+            return reset.errorDescription ?? "Enter the email on your account."
+        }
+        let nsError = error as NSError
+        if nsError.domain == AuthErrorDomain, let code = AuthErrorCode(rawValue: nsError.code) {
+            switch code {
+            case .invalidCredential, .wrongPassword, .userNotFound, .invalidEmail:
+                return Self.mismatch
+            case .networkError:
+                return "Check your connection and try again."
+            case .tooManyRequests:
+                return "Too many tries. Wait a minute and try again."
+            case .userDisabled:
+                return "This account is disabled."
+            case .weakPassword:
+                return "Use a password with at least 6 characters."
+            case .emailAlreadyInUse:
+                return "That email already has an account. Sign in or reset the password."
+            case .expiredActionCode, .invalidActionCode:
+                return "This reset link expired. Request a new one from Forgot password."
+            default:
+                break
+            }
+        }
+        let text = nsError.localizedDescription
+        if text.localizedCaseInsensitiveContains("malformed")
+            || text.localizedCaseInsensitiveContains("invalid-credential")
+            || text.localizedCaseInsensitiveContains("INVALID_LOGIN") {
+            return Self.mismatch
+        }
+        return text
+    }
+
+    private static let mismatch =
+        "That email or password doesn’t match. If you just reset, use the new password from the email."
+}
+
+private enum AuthResetError: LocalizedError {
+    case emptyEmail
+
+    var errorDescription: String? {
+        "Enter the email on your account."
     }
 }

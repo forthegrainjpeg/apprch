@@ -32,7 +32,7 @@ enum AppLinks {
     }
 
     static func tagURL(triggerId: String) -> String {
-        "apprch://open?id=\(triggerId)"
+        webURL(triggerId: triggerId)
     }
 
     static func webURL(triggerId: String) -> String {

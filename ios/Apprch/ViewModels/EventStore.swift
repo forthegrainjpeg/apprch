@@ -96,8 +96,13 @@ enum EventStore {
             "eventCount": max(0, currentCount - today.count)
         ]
         if let latestEarlier {
-            taskUpdate["lastLoggedAt"] = latestEarlier.data()["timestamp"] as Any
-            taskUpdate["lastLoggedByUid"] = (latestEarlier.data()["loggedByUid"] ?? latestEarlier.data()["triggeredByUid"]) as Any
+            let earlier = latestEarlier.data()
+            if let timestamp = earlier["timestamp"] {
+                taskUpdate["lastLoggedAt"] = timestamp
+            }
+            if let loggedBy = earlier["loggedByUid"] ?? earlier["triggeredByUid"] {
+                taskUpdate["lastLoggedByUid"] = loggedBy
+            }
         } else {
             taskUpdate["lastLoggedAt"] = FieldValue.delete()
             taskUpdate["lastLoggedByUid"] = FieldValue.delete()
